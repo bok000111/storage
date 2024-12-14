@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from passlib.context import CryptContext
 import jwt
@@ -66,3 +67,13 @@ async def register_refresh_token(user: User, token: str, db: AsyncSession):
 
     db.add(refresh_token)
     await db.commit()
+
+
+async def unregister_refresh_token(refresh_token: str, db: AsyncSession):
+    query = select(RefreshTokenModel).where(RefreshTokenModel.token == refresh_token)
+    result = await db.execute(query)
+    token_model = result.scalars().first()
+
+    if token_model:
+        await db.delete(token_model)
+        await db.commit()
