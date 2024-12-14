@@ -1,9 +1,12 @@
 import pytest
-from app.main import app
+import logging
+
 from app.tests.utils import new_async_client
 from app.tests.factories import AsyncUserFactory
 from app.utils.auth import get_user, decode_token
 from app.utils.jwt import hash_password, create_access_token
+
+logger = logging.getLogger("auth")
 
 
 @pytest.mark.asyncio
@@ -77,11 +80,23 @@ async def test_login(db):
         assert response_data["token_type"] == "bearer"
         assert "access_token" in response_data
 
-        payload = decode_token(response_data["access_token"]).get("sub")
+        payload = decode_token(response_data["access_token"])
 
-        test_user = await get_user(payload=payload, db=db)
+        test_user = await get_user(payload=payload.get("sub"), db=db)
         assert test_user.username == "johndoe"
         assert test_user.email == "johndoe@example.com"
+
+        cookies = response.cookies
+        assert "refresh_token" in cookies
+
+        set_cookie_header = response.headers.get("set-cookie")
+        assert set_cookie_header is not None
+        assert "HttpOnly" in set_cookie_header
+
+        refresh_token = cookies["refresh_token"]
+        payload = decode_token(refresh_token)
+        assert payload is not None
+        assert payload.get("sub") == "johndoe"
 
 
 @pytest.mark.asyncio
