@@ -1,21 +1,25 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Security,
+    Response,
+    HTTPException,
+)
+from fastapi_jwt import JwtAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from app.config import settings
 from app.database import get_db
 from app.models.auth import UserModel
 from app.schemas.auth import User, UserCreate, Token
 from app.utils.jwt import (
-    hash_password,
-    create_access_token,
-    create_refresh_token,
-    register_refresh_token,
-    unregister_refresh_token,
+    access_security,
+    refresh_security,
 )
 from app.utils.auth import auth_user, get_current_user
+from app.config import settings
 
 router = APIRouter()
 
@@ -43,13 +47,10 @@ async def signup(
     if exist:
         raise HTTPException(status_code=400, detail="Username already exists")
 
-    hashed_password = hash_password(data.password)
-
-    new_user = UserModel(
+    new_user = UserModel.create(
         username=data.username,
         email=data.email,
-        password=hashed_password,
-        is_email_verified=True,
+        password=data.password,
     )
 
     db.add(new_user)
@@ -65,18 +66,20 @@ async def login(
     db: Annotated[AsyncSession, Depends(get_db)],
     response: Response,
 ):
-    access_token = create_access_token({"sub": user.username})
-    refresh_token = create_refresh_token({"sub": user.username})
-
-    await register_refresh_token(user=user, token=refresh_token, db=db)
+    access_token = access_security.create_access_token(
+        subject={"username": user.username}
+    )
+    refresh_token = refresh_security.create_refresh_token(
+        subject={"username": user.username}
+    )
 
     response.set_cookie(
-        key="refresh_token",
+        key="refresh_token_cookie",
         value=refresh_token,
         httponly=True,
+        samesite="lax",
         secure=not settings.debug,
-        samesite="Lax",
-        max_age=settings.jwt_exp_day * 24 * 60 * 60,
+        max_age=60 * 60 * 24 * 7,
     )
 
     return Token(
@@ -87,19 +90,36 @@ async def login(
 
 @router.post("/logout")
 async def logout(
-    _: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db)],
-    request: Request,
     response: Response,
 ):
-    refresh_token = request.cookies.get("refresh_token")
-    if not refresh_token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Refresh token not found in cookies",
-        )
-
-    await unregister_refresh_token(refresh_token=refresh_token, db=db)
-    response.delete_cookie("refresh_token")
+    response.delete_cookie(
+        key="refresh_token_cookie",
+        httponly=True,
+        samesite="lax",
+        secure=not settings.debug,
+    )
 
     return {"message": "Successfully logged out"}
+
+
+@router.post("/refresh")
+async def refresh(
+    credentials: Annotated[JwtAuthorizationCredentials, Security(refresh_security)],
+    response: Response,
+):
+    access_token = access_security.create_access_token(subject=credentials.subject)
+    refesh_token = refresh_security.create_refresh_token(subject=credentials.subject)
+
+    response.set_cookie(
+        key="refresh_token_cookie",
+        value=refesh_token,
+        httponly=True,
+        samesite="lax",
+        secure=not settings.debug,
+        max_age=60 * 60 * 24 * 7,
+    )
+
+    return Token(
+        access_token=access_token,
+        token_type="bearer",
+    )

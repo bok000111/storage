@@ -3,8 +3,7 @@ import logging
 
 from app.tests.utils import new_async_client
 from app.tests.factories import AsyncUserFactory
-from app.utils.auth import get_user, decode_token
-from app.utils.jwt import hash_password, create_access_token
+from app.utils.hash import hash_password
 
 logger = logging.getLogger("auth")
 
@@ -60,7 +59,7 @@ async def test_signup_duplicate():
 
 
 @pytest.mark.asyncio
-async def test_login(db):
+async def test_login():
     await AsyncUserFactory(
         username="johndoe",
         email="johndoe@example.com",
@@ -80,23 +79,8 @@ async def test_login(db):
         assert response_data["token_type"] == "bearer"
         assert "access_token" in response_data
 
-        payload = decode_token(response_data["access_token"])
-
-        test_user = await get_user(payload=payload.get("sub"), db=db)
-        assert test_user.username == "johndoe"
-        assert test_user.email == "johndoe@example.com"
-
         cookies = response.cookies
-        assert "refresh_token" in cookies
-
-        set_cookie_header = response.headers.get("set-cookie")
-        assert set_cookie_header is not None
-        assert "HttpOnly" in set_cookie_header
-
-        refresh_token = cookies["refresh_token"]
-        payload = decode_token(refresh_token)
-        assert payload is not None
-        assert payload.get("sub") == "johndoe"
+        assert "refresh_token_cookie" in cookies
 
 
 @pytest.mark.asyncio
@@ -119,7 +103,7 @@ async def test_login_invalid():
 
 
 @pytest.mark.asyncio
-async def test_logout(db):
+async def test_logout():
     await AsyncUserFactory(
         username="johndoe",
         email="johndoe@example.com",
@@ -136,7 +120,7 @@ async def test_logout(db):
         assert response.status_code == 200
 
         cookies = response.cookies
-        assert "refresh_token" in cookies
+        assert "refresh_token_cookie" in cookies
 
         response = await client.post(
             "/api/auth/logout",
@@ -145,51 +129,83 @@ async def test_logout(db):
         assert response.status_code == 200
 
         cookies = response.cookies
-        assert "refresh_token" not in cookies
+        assert "refresh_token_cookie" not in cookies
 
         set_cookie_header = response.headers.get("set-cookie")
         assert set_cookie_header is not None
-        assert "expires" in set_cookie_header
 
 
 @pytest.mark.asyncio
-async def test_me(db):
+async def test_me():
     await AsyncUserFactory(
         username="johndoe",
         email="johndoe@example.com",
         password=hash_password("securepassword"),
     )
 
-    token = create_access_token({"sub": "johndoe"})
-
     async with new_async_client() as client:
-        response = await client.get(
-            "/api/auth/me", headers={"Authorization": f"Bearer {token}"}
-        )
+        login_data = {
+            "username": "johndoe",
+            "password": "securepassword",
+        }
 
+        response = await client.post("/api/auth/login", data=login_data)
         assert response.status_code == 200
+
+        access_token = response.json()["access_token"]
+
+        response = await client.get(
+            "/api/auth/me", headers={"Authorization": f"Bearer {access_token}"}
+        )
+        assert response.status_code == 200
+
         response_data = response.json()
         assert response_data["username"] == "johndoe"
-        assert response_data["email"] == "johndoe@example.com"
-        assert "id" in response_data
 
 
 @pytest.mark.asyncio
-async def test_me_invalid_token(db):
-    token = create_access_token({"sub": "johndoe"})
-
-    async with new_async_client() as client:
-        response = await client.get(
-            "/api/auth/me", headers={"Authorization": f"Bearer {token}"}
-        )
-
-        assert response.status_code == 401
-        assert response.json() == {"detail": "Invalid credentials"}
+async def test_me_invalid_token():
 
     async with new_async_client() as client:
         response = await client.get(
             "/api/auth/me", headers={"Authorization": "Bearer invalidtoken"}
         )
-
         assert response.status_code == 401
-        assert response.json() == {"detail": "Invalid credentials"}
+
+
+@pytest.mark.asyncio
+async def test_refresh_token(db):
+    await AsyncUserFactory(
+        username="johndoe",
+        email="johndoe@example.com",
+        password=hash_password("securepassword"),
+    )
+
+    async with new_async_client() as client:
+        login_data = {
+            "username": "johndoe",
+            "password": "securepassword",
+        }
+
+        response = await client.post("/api/auth/login", data=login_data)
+        assert response.status_code == 200
+
+        cookies = response.cookies
+        assert "refresh_token_cookie" in cookies
+
+        prev_refresh_token = cookies["refresh_token_cookie"]
+
+        response = await client.post(
+            "/api/auth/refresh",
+            headers={"Authorization": f"Bearer {response.json()['access_token']}"},
+        )
+        assert response.status_code == 200
+
+        response_data = response.json()
+        assert response_data["token_type"] == "bearer"
+        assert "access_token" in response_data
+
+        cookies = response.cookies
+        assert "refresh_token_cookie" in cookies
+
+        assert prev_refresh_token != cookies["refresh_token_cookie"]

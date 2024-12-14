@@ -1,8 +1,7 @@
 import factory
 from faker import Faker
-from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.auth import UserModel
-from app.utils.jwt import hash_password
+from app.utils.hash import hash_password
 
 faker = Faker()
 

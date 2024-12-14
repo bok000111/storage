@@ -1,40 +1,30 @@
 from typing import Annotated, Optional
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import Depends, Security, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from fastapi_jwt import JwtAuthorizationCredentials
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
-from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
+from passlib.context import CryptContext
 
 from app.database import get_db
 from app.models.auth import UserModel
 from app.schemas.auth import User
-from app.utils.jwt import decode_token, verify_password, oauth2_scheme
+from app.utils.hash import verify_password
+from app.utils.jwt import access_security
 
 
-async def get_token_payload(token: Annotated[str, Depends(oauth2_scheme)]):
-    if not token:
-        return None
-    try:
-        payload = decode_token(token)
-        if not payload:
-            return None
-    except ExpiredSignatureError:
-        return None
-    except InvalidTokenError:
-        return None
-    return payload.get("sub")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
 async def get_user(
     id: Optional[int] = None,
     username: Optional[str] = None,
     email: Optional[str] = None,
-    payload: Optional[str] = Depends(get_token_payload),
     db: AsyncSession = Depends(get_db),
 ):
-    if not any([id, username, email, payload]):
+    if not any([id, username, email]):
         return None
 
     query = select(UserModel)
@@ -44,8 +34,6 @@ async def get_user(
         query = query.where(UserModel.username == username)
     elif email:
         query = query.where(UserModel.email == email)
-    elif payload:
-        query = query.where(UserModel.username == payload)
 
     try:
         result = await db.execute(query)
@@ -86,11 +74,7 @@ async def auth_user(
 
 
 async def get_current_user(
-    user: Annotated[User, Depends(get_user)],
+    credentials: JwtAuthorizationCredentials = Security(access_security),
+    db: AsyncSession = Depends(get_db),
 ):
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-        )
-    return user
+    return await get_user(username=credentials.subject.get("username"), db=db)
