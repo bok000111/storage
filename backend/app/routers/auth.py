@@ -1,7 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -9,7 +8,12 @@ from app.config import settings
 from app.database import get_db
 from app.models.auth import UserModel
 from app.schemas.auth import User, UserCreate, Token
-from app.utils.jwt import create_access_token, hash_password
+from app.utils.jwt import (
+    hash_password,
+    create_access_token,
+    create_refresh_token,
+    register_refresh_token,
+)
 from app.utils.auth import auth_user, get_current_user
 
 router = APIRouter()
@@ -57,8 +61,22 @@ async def signup(
 @router.post("/login", response_model=Token)
 async def login(
     user: Annotated[User, Depends(auth_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    response: Response,
 ):
     access_token = create_access_token({"sub": user.username})
+    refresh_token = create_refresh_token({"sub": user.username})
+
+    await register_refresh_token(user=user, token=refresh_token, db=db)
+
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=not settings.debug,
+        samesite="Lax",
+        max_age=settings.jwt_exp_day * 24 * 60 * 60,
+    )
 
     return Token(
         access_token=access_token,
