@@ -6,7 +6,6 @@ from fastapi_jwt import JwtAuthorizationCredentials
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
-from passlib.context import CryptContext
 
 from app.database import get_db
 from app.models.auth import UserModel

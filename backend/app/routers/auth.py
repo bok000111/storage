@@ -62,7 +62,7 @@ async def signup(
 
 @router.post("/login", response_model=Token)
 async def login(
-    user: Annotated[User, Depends(auth_user)],
+    user: Annotated[User, Security(auth_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     response: Response,
 ):
