@@ -1,8 +1,8 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime
-from sqlalchemy.sql import func
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+from app.utils.hash import hash_password
 
 
 class UserModel(Base):
@@ -19,6 +19,23 @@ class UserModel(Base):
         "RefreshTokenModel", back_populates="user", cascade="all, delete-orphan"
     )
 
+    @classmethod
+    def create(
+        cls,
+        username: str,
+        email: str,
+        password: str,
+        is_email_verified: bool = True,
+        is_superuser: bool = False,
+    ):
+        return cls(
+            username=username,
+            email=email,
+            password=hash_password(password),
+            is_email_verified=is_email_verified,
+            is_superuser=is_superuser,
+        )
+
 
 class RefreshTokenModel(Base):
     __tablename__ = "refresh_tokens"
@@ -29,7 +46,5 @@ class RefreshTokenModel(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     is_revoked = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=func.now())
-    expires_at = Column(DateTime, nullable=False)
 
     user = relationship("UserModel", back_populates="refresh_tokens")
