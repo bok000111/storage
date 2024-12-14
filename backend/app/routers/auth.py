@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -13,6 +13,7 @@ from app.utils.jwt import (
     create_access_token,
     create_refresh_token,
     register_refresh_token,
+    unregister_refresh_token,
 )
 from app.utils.auth import auth_user, get_current_user
 
@@ -86,6 +87,19 @@ async def login(
 
 @router.post("/logout")
 async def logout(
-    user: Annotated[User, Depends(get_current_user)],
+    _: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+    response: Response,
 ):
-    return {"msg": "Logout"}
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refresh token not found in cookies",
+        )
+
+    await unregister_refresh_token(refresh_token=refresh_token, db=db)
+    response.delete_cookie("refresh_token")
+
+    return {"message": "Successfully logged out"}
