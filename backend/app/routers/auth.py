@@ -15,15 +15,18 @@ from app.utils.auth import auth_user, get_current_user
 router = APIRouter()
 
 
-@router.get("/")
-async def hello():
-    return {"msg": f"Hello World from {__name__}"}
+@router.get("/me", response_model=User)
+async def me(
+    user: Annotated[User, Depends(get_current_user)],
+):
+    return user
 
 
-# TODO: create tokens
-# TODO: Send email verification
 @router.post("/signup", response_model=User)
-async def signup(data: UserCreate, db: Annotated[AsyncSession, Depends(get_db)]):
+async def signup(
+    data: UserCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
     result = await db.execute(select(UserModel).where(UserModel.email == data.email))
     exist = result.scalars().first()
     if exist:
@@ -53,13 +56,8 @@ async def signup(data: UserCreate, db: Annotated[AsyncSession, Depends(get_db)])
 
 @router.post("/login", response_model=Token)
 async def login(
-    data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(auth_user)],
 ):
-    user = await auth_user(data.username, data.password, db)
-    if user is None:
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
-
     access_token = create_access_token({"sub": user.username})
 
     return Token(
@@ -70,13 +68,6 @@ async def login(
 
 @router.post("/logout")
 async def logout(
-    user: Annotated[UserModel, Depends(get_current_user)],
-):
-    return {"msg": "Logout"}
-
-
-@router.get("/me", response_model=User)
-async def me(
     user: Annotated[User, Depends(get_current_user)],
 ):
-    return user
+    return {"msg": "Logout"}
