@@ -35,5 +35,7 @@ def decode_token(token: str):
             token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
         )
         return payload
+    except jwt.ExpiredSignatureError:
+        raise jwt.ExpiredSignatureError
     except jwt.PyJWTError:
-        return None
+        raise jwt.InvalidTokenError
