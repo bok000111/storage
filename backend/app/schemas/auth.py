@@ -19,3 +19,11 @@ class User(BaseModel):
     is_email_verified: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PubKeyRegister(BaseModel):
+    key: str
+    key_type: str
+    signed_data: str
+
+    model_config = ConfigDict(from_attributes=True)
