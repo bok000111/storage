@@ -10,10 +10,13 @@ from fastapi import (
 from fastapi_jwt import JwtAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.exceptions import InvalidSignature
 
 from app.database import get_db
-from app.models.auth import UserModel
-from app.schemas.auth import User, UserCreate, Token
+from app.models.auth import UserModel, PublicKeyModel
+from app.schemas.auth import User, UserCreate, Token, PubKeyRegister
 from app.utils.jwt import (
     access_security,
     refresh_security,
@@ -91,6 +94,7 @@ async def login(
 @router.post("/logout")
 async def logout(
     response: Response,
+    _: Annotated[JwtAuthorizationCredentials, Security(refresh_security)],
 ):
     response.delete_cookie(
         key="refresh_token_cookie",
@@ -123,3 +127,55 @@ async def refresh(
         access_token=access_token,
         token_type="bearer",
     )
+
+
+# @router.get("/pubkey")
+# async def pubkey(
+#     user: Annotated[User, Depends(get_current_user)],
+#     db: Annotated[AsyncSession, Depends(get_db)],
+# ):
+#     query = select(PublicKeyModel).where(PublicKeyModel.user_id == user.id)
+#     result = await db.execute(query)
+#     public_key = result.scalars().first()
+#     if not public_key:
+#         raise HTTPException(status_code=404, detail="Public key not found")
+
+#     return {"key": public_key.key, "key_type": public_key.key_type}
+
+
+@router.post("/pubkey")
+async def pubkey(
+    data: PubKeyRegister,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    query = select(PublicKeyModel).where(
+        PublicKeyModel.user_id == user.id,
+    )
+    result = await db.execute(query)
+    exist = result.scalars().first()
+    if exist:
+        raise HTTPException(status_code=400, detail="Public key already exists")
+
+    try:
+        public_key = serialization.load_pem_public_key(data.key.encode())
+        # TODO: use nonces or timestamps to prevent replay attacks
+        public_key.verify(
+            bytes.fromhex(data.signed_data),
+            user.username.encode(),
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH,
+            ),
+            hashes.SHA256(),
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid public key format")
+    except InvalidSignature:
+        raise HTTPException(status_code=400, detail="Signature verification failed")
+
+    new_key = PublicKeyModel(key=data.key, key_type=data.key_type, user_id=user.id)
+    db.add(new_key)
+    await db.commit()
+
+    return {"message": "Public key registered"}
