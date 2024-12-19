@@ -149,6 +149,7 @@ async def pubkey(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    # TODO: 의존성 주입을 사용하여 분리
     query = select(PublicKeyModel).where(
         PublicKeyModel.user_id == user.id,
     )
@@ -158,11 +159,10 @@ async def pubkey(
         raise HTTPException(status_code=400, detail="Public key already exists")
 
     try:
-        public_key = serialization.load_pem_public_key(data.key.encode())
-        # TODO: use nonces or timestamps to prevent replay attacks
+        public_key = serialization.load_der_public_key(data.key)
         public_key.verify(
-            bytes.fromhex(data.signed_data),
-            user.username.encode(),
+            data.signature,
+            user.username.encode() + data.nonce,
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
                 salt_length=padding.PSS.MAX_LENGTH,
@@ -174,7 +174,7 @@ async def pubkey(
     except InvalidSignature:
         raise HTTPException(status_code=400, detail="Signature verification failed")
 
-    new_key = PublicKeyModel(key=data.key, key_type=data.key_type, user_id=user.id)
+    new_key = PublicKeyModel(key=data.key, user_id=user.id)
     db.add(new_key)
     await db.commit()
 

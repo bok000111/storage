@@ -1,10 +1,16 @@
+import base64
+import os
+
 import pytest
 import logging
 
-from app.tests.utils import new_async_client
-from app.tests.factories import AsyncUserFactory
+from cryptography.hazmat.primitives.serialization import load_der_private_key
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+
+from app.tests.utils import new_async_client, new_signed_client
+from app.tests.factories import AsyncUserFactory, AsymmetricKeyFactory
 from app.utils.hash import hash_password
-from app.utils.jwt import access_security, refresh_security
 
 logger = logging.getLogger("auth")
 
@@ -91,22 +97,8 @@ async def test_login():
 
 @pytest.mark.asyncio
 async def test_logout():
-    await AsyncUserFactory(
-        username="johndoe",
-        email="johndoe@example.com",
-        password=hash_password("securepassword"),
-    )
-    access_token = access_security.create_access_token(subject={"username": "johndoe"})
-    refresh_token = refresh_security.create_refresh_token(
-        subject={"username": "johndoe"}
-    )
-
-    async with new_async_client() as client:
-        client.cookies.set("refresh_token_cookie", refresh_token)
-        response = await client.post(
-            "/api/auth/logout",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
+    async with await new_signed_client() as client:
+        response = await client.post("/api/auth/logout")
         assert response.status_code == 200
 
         cookies = response.cookies
@@ -125,47 +117,22 @@ async def test_logout():
 
 @pytest.mark.asyncio
 async def test_me():
-    await AsyncUserFactory(
-        username="johndoe",
-        email="johndoe@example.com",
-        password=hash_password("securepassword"),
-    )
-    access_token = access_security.create_access_token(subject={"username": "johndoe"})
-
-    async with new_async_client() as client:
-        response = await client.get(
-            "/api/auth/me", headers={"Authorization": f"Bearer {access_token}"}
-        )
+    async with await new_signed_client() as client:
+        response = await client.get("/api/auth/me")
         assert response.status_code == 200
 
         response_data = response.json()
-        assert response_data["username"] == "johndoe"
+        assert response_data["username"] == client.user.username
 
     async with new_async_client() as client:
-        response = await client.get(
-            "/api/auth/me", headers={"Authorization": "Bearer invalidtoken"}
-        )
+        response = await client.get("/api/auth/me")
         assert response.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_refresh_token(db):
-    await AsyncUserFactory(
-        username="johndoe",
-        email="johndoe@example.com",
-        password=hash_password("securepassword"),
-    )
-    access_token = access_security.create_access_token(subject={"username": "johndoe"})
-    refresh_token = refresh_security.create_refresh_token(
-        subject={"username": "johndoe"}
-    )
-
-    async with new_async_client() as client:
-        client.cookies.set("refresh_token_cookie", refresh_token)
-        response = await client.post(
-            "/api/auth/refresh",
-        )
-        assert response.status_code == 200
+async def test_refresh_token():
+    async with await new_signed_client() as client:
+        response = await client.post("/api/auth/refresh")
 
         response_data = response.json()
         assert response_data["token_type"] == "bearer"
@@ -175,74 +142,129 @@ async def test_refresh_token(db):
         assert "refresh_token_cookie" in cookies
 
     async with new_async_client() as client:
+        client.cookies["refresh_token_cookie"] = "invalidtoken"
         response = await client.post(
             "/api/auth/refresh",
-            headers={"Authorization": f"Bearer {access_token}"},
         )
         assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_upload_public_key():
-    await AsyncUserFactory(
-        username="johndoe",
-        email="johndoe@example.com",
-        password=hash_password("securepassword"),
-    )
-    access_token = access_security.create_access_token(subject={"username": "johndoe"})
 
-    from cryptography.hazmat.primitives.asymmetric import rsa, padding
-    from cryptography.hazmat.primitives import serialization, hashes
-
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_key = private_key.public_key()
-    public_pem = public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
-    signed_data = private_key.sign(
-        b"johndoe",
-        padding.PSS(
-            mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH
-        ),
-        hashes.SHA256(),
-    )
-
-    async with new_async_client() as client:
+    async with await new_signed_client() as client:
         response = await client.post(
             "/api/auth/pubkey",
             json={
-                "key": "invalidkey",
-                "key_type": "RSA",
-                "signed_data": "invalidsigneddata",
+                "key": base64.b64encode(b"invalidkey").decode(),
+                "signature": base64.b64encode(b"invalidsigneddata").decode(),
+                "nonce": base64.b64encode(b"invalidnonce").decode(),
             },
-            headers={"Authorization": f"Bearer {access_token}"},
         )
         assert response.status_code == 400
         assert response.json() == {"detail": "Invalid public key format"}
 
-    async with new_async_client() as client:
-        response = await client.post(
-            "/api/auth/pubkey",
-            json={
-                "key": public_pem.decode(),
-                "key_type": "RSA",
-                "signed_data": signed_data.hex(),
-            },
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        assert response.status_code == 200
-        assert response.json() == {"message": "Public key registered"}
+    async with await new_signed_client() as client:
+        asymmetric_key = AsymmetricKeyFactory()
 
-    async with new_async_client() as client:
         response = await client.post(
             "/api/auth/pubkey",
             json={
-                "key": public_pem.decode(),
-                "key_type": "RSA",
-                "signed_data": signed_data.hex(),
+                "key": base64.b64encode(asymmetric_key["public_key_der"]).decode(),
+                "signature": base64.b64encode(b"invalidsigneddata").decode(),
+                "nonce": base64.b64encode(b"invalidnonce").decode(),
             },
-            headers={"Authorization": f"Bearer {access_token}"},
         )
         assert response.status_code == 400
-        assert response.json() == {"detail": "Public key already exists"}
+
+    async with await new_signed_client() as client:
+        asymmetric_key = AsymmetricKeyFactory()
+        asymmetric_key2 = AsymmetricKeyFactory()
+        private_key = load_der_private_key(
+            asymmetric_key2["private_key_der"],
+            password=None,
+        )
+
+        nonce = os.urandom(32)
+        data = client.user.username.encode() + nonce
+
+        signed_data_with_invalid_key = private_key.sign(
+            data=data,
+            padding=padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH,
+            ),
+            algorithm=hashes.SHA256(),
+        )
+
+        response = await client.post(
+            "/api/auth/pubkey",
+            json={
+                "key": base64.b64encode(asymmetric_key["public_key_der"]).decode(),
+                "signature": base64.b64encode(signed_data_with_invalid_key).decode(),
+                "nonce": base64.b64encode(nonce).decode(),
+            },
+        )
+
+        assert response.status_code == 400
+
+    async with await new_signed_client() as client:
+        asymmetric_key = AsymmetricKeyFactory()
+        private_key = load_der_private_key(
+            asymmetric_key["private_key_der"],
+            password=None,
+        )
+
+        nonce = os.urandom(32)
+        invalid_data = client.user.username.encode() + nonce + b"invaliddata"
+
+        signed_data = private_key.sign(
+            data=invalid_data,
+            padding=padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH,
+            ),
+            algorithm=hashes.SHA256(),
+        )
+
+        response = await client.post(
+            "/api/auth/pubkey",
+            json={
+                "key": base64.b64encode(asymmetric_key["public_key_der"]).decode(),
+                "signature": base64.b64encode(signed_data).decode(),
+                "nonce": base64.b64encode(nonce).decode(),
+            },
+        )
+
+        assert response.status_code == 400
+
+    async with await new_signed_client() as client:
+        asymmetric_key = AsymmetricKeyFactory()
+        private_key = load_der_private_key(
+            asymmetric_key["private_key_der"],
+            password=None,
+        )
+
+        nonce = os.urandom(32)
+        data = client.user.username.encode() + nonce
+
+        signed_data = private_key.sign(
+            data=data,
+            padding=padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH,
+            ),
+            algorithm=hashes.SHA256(),
+        )
+
+        response = await client.post(
+            "/api/auth/pubkey",
+            json={
+                "key": base64.b64encode(asymmetric_key["public_key_der"]).decode(),
+                "signature": base64.b64encode(signed_data).decode(),
+                "nonce": base64.b64encode(nonce).decode(),
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"message": "Public key registered"}

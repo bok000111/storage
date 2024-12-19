@@ -1,4 +1,5 @@
 from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic.types import Base64Bytes
 
 
 class Token(BaseModel):
@@ -22,8 +23,6 @@ class User(BaseModel):
 
 
 class PubKeyRegister(BaseModel):
-    key: str
-    key_type: str
-    signed_data: str
-
-    model_config = ConfigDict(from_attributes=True)
+    key: Base64Bytes
+    signature: Base64Bytes
+    nonce: Base64Bytes

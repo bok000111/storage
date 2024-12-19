@@ -59,7 +59,6 @@ class PublicKeyModel(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     key = Column(Text, unique=True, index=True, nullable=False)
-    key_type = Column(String(32), nullable=False)
     user_id = Column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True
     )
